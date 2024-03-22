@@ -20,6 +20,12 @@ You can customize the variant classification logic by modifying the classify_var
 
 Additionally, you'll need to implement the parse_vep_output function to parse the VEP output and extract relevant annotations based on the output format.
 
+![image](https://github.com/balqees-mansour/ACMG-Compliant-Clinical-Report/assets/87857777/07fa2d62-56b1-44a3-bbdc-cd67dc173299)
+
+
+![image](https://github.com/balqees-mansour/ACMG-Compliant-Clinical-Report/assets/87857777/7b900cd3-244e-4001-90e4-71122b95d011)
+
+
 ## Future Enhancements
 
 While the current implementation uses the Ensembl Variant Effect Predictor (VEP) for variant annotation, it doesn't provide direct ACMG classification, and the ClinVar annotations were found to be empty after the annotation process.
