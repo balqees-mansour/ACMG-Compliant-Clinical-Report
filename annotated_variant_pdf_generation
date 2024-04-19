@@ -1,0 +1,243 @@
+ 
+===================================================== variant filteration ===========================================================
+
+# ------------------- ------------------------------------------------------------
+# Filter Variants - GATK4
+# ------------------- ------------------------------------------------------------
+#!/bin/bash
+## Reference preparations 
+# download reference files
+mkdir ref 
+wget -P ~/ref/ https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz
+gunzip ~/ref/hg38.fa.gz
+
+# index ref - .fai file before running haplotype caller
+samtools faidx ~/ref/hg38.fa
+
+# ref dict - .dict file before running haplotype caller
+gatk CreateSequenceDictionary R=~/ref/hg38.fa O=~/ref/hg38.dict
+
+
+
+gatk VariantFiltration \
+        -R /home/balqees/gatk/hg38.fa \
+        -V /home/balqees/gatk/output/normal_sample.deepvariant.vcf \
+        -O /home/balqees/gatk/output/filtered_variants.vcf \
+        -filter-name "QD_filter" -filter "QD < 2.0" \
+        -filter-name "FS_filter" -filter "FS > 60.0" \
+        -filter-name "MQ_filter" -filter "MQ < 40.0" \
+        -filter-name "SOR_filter" -filter "SOR > 4.0" \
+        -filter-name "MQRankSum_filter" -filter "MQRankSum < -12.5" \
+        -filter-name "ReadPosRankSum_filter" -filter "ReadPosRankSum < -8.0" \
+        -genotype-filter-expression "DP < 10" \
+        -genotype-filter-name "DP_filter" \
+        -genotype-filter-expression "GQ < 10" \
+        -genotype-filter-name "GQ_filter"
+
+
+# Select Variants that PASS filters
+gatk SelectVariants \
+	--exclude-filtered \
+	-V /home/balqees/gatk/output/filtered_variants.vcf \
+	-O /home/balqees/gatk/output/analysis-ready-variants.vcf
+
+# to exclude variants that failed genotype filters
+cat ~/gatk/output/analysis-ready-variant|grep -v -E "DP_filter|GQ_filter" > ~/gatk/output/analysis-ready-variants-filteredGT.vcf
+
+# ------------------- ---------------------------------------------------------
+# Annotate Variants - GATK4 Funcotator
+# ------------------- ---------------------------------------------------------
+
+# Annotate using Funcotator
+gatk Funcotator \
+	--variant ${results}/analysis-ready-snps-filteredGT.vcf \
+	--reference ${ref} \
+	--ref-version hg38 \
+	--data-sources-path /Users/kr/Desktop/demo/tools/functotator_prepackaged_sources/funcotator/hg38/funcotator_dataSources.v1.7.20200521g \
+	--output ${results}/analysis-ready-snps-filteredGT-functotated.vcf \
+	--output-file-format VCF
+	
+# ------------------- ---------------------------------------------------------
+# Annotate Variants - VEP 
+# ------------------- ---------------------------------------------------------
+
+
+mkdir $HOME/vep_new
+chmod -R a+rwx $HOME/vep_new
+cd $HOME/vep_new
+
+#- download Indexed cache
+cd $HOME/.vep
+curl -O https://ftp.ensembl.org/pub/release-111/variation/indexed_vep_cache/homo_sapiens_vep_111_GRCh38.tar.gz
+tar xzf homo_sapiens_vep_111_GRCh38.tar.gz
+
+
+#-FASTA files 
+curl -O https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+gzip -d Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz
+bgzip Homo_sapiens.GRCh38.dna.primary_assembly.fa
+
+# index input file 
+bgzip -c pindel.vcf > pindel.vcf.gz #  skip this if the file is zipped 
+tabix -p vcf pindel.vcf.gz
+
+#1
+sudo docker run -v $HOME/vep_new:/data:Z ensemblorg/ensembl-vep:release_111.0   vep --cache --offline --format vcf --vcf --force_overwrite   --tab    --input_file normal_sample.deepvariant.vcf       --output_file output/my_output.tsv
+#2
+
+sudo docker run -v $HOME/vep_new:/data:Z ensemblorg/ensembl-vep:release_111.0   vep --cache --offline  --force_overwrite --tab  --fields  "Location, Gene , Feature,Feature type,Consequence,Codon change,IMPACT,VARIANT_CLASS, SIFT,PolyPhen,IND,AF, gnomADe_AF,gnomADg_AF,CLIN_SIG ,CLNDN,PUBMED" --everything  --input_file normal_sample.deepvariant.vcf       --output_file output/clin_var_output2.tsv --custom file=clinvar.vcf.gz,short_name=ClinVar,format=vcf,type=exact,coords=0,fields=CLNSIG%CLNREVSTAT%CLNDN
+
+# ------------------- ---------------------------------------------------------
+#                        ANNOVAR Annotations
+# ------------------- ---------------------------------------------------------
+wget http://www.openbioinformatics.org/annovar/download/0wgxR2rIVP/annovar.latest.tar.gz
+tar xvfz annovar.latest.tar.gz
+cd annovar
+
+
+
+#Download dataset of hg38 required for annotate vcf file ; prior to this make a "humandb" folder where data will be downloaded
+
+perl annotate_variation.pl -buildver hg38 -downdb -webfrom annovar refGene humandb/
+perl annotate_variation.pl -buildver hg38 -downdb cytoBand humandb/
+perl annotate_variation.pl -buildver hg38 -downdb -webfrom annovar exac03 humandb/
+perl annotate_variation.pl -buildver hg38 -downdb -webfrom annovar avsnp147 humandb/
+perl annotate_variation.pl -buildver hg38 -downdb -webfrom annovar dbnsfp30a humandb/
+perl annotate_variation.pl -buildver hg38 -downdb -webfrom annovar clinvar_20150629 humandb/
+
+
+# for annotations 
+table_annovar.pl example/ex1.avinput humandb/ -buildver hg19 -out myanno -remove -protocol refGene,cytoBand,exac03,avsnp147,dbnsfp30a -operation gx,r,f,f,f -nastring . -csvout -polish -xref example/gene_xref.txt
+
+# ------------------- ---------------------------------------------------------
+#                            ClinVar Annotation
+# ------------------- ---------------------------------------------------------
+
+
+wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar_20240331.vcf.gz
+wget https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar_20240331.vcf.gz.tbi
+vt decompose clinvar_20180603.vcf.gz -o temp.split.vcf
+prepare_annovar_user.pl   -dbtype clinvar_preprocess2 temp.split.vcf -out temp.split2.vcf
+vt normalize temp.split2.vcf -r ~/project/seqlib/GRCh38/old/GRCh38.fa -o temp.norm.vcf -w 2000000
+prepare_annovar_user.pl -dbtype clinvar2 temp.norm.vcf -out hg38_clinvar_20180603_raw.txt
+index_annovar.pl hg38_clinvar_20180603_raw.txt -out hg38_clinvar_20180603.txt -comment comment_20180708.txt
+
+
+
+
+# ------------------- ---------------------------------------------------------
+#                         Pdf Report Generation
+# ------------------- ---------------------------------------------------------
+import vcf
+import pysam
+import pandas as pd
+from fpdf import FPDF
+
+# Step 1: Parsing VCF Files
+def parse_vcf(vcf_file):
+    """
+    Parse a VCF file and return a DataFrame containing variant information.
+    """
+    vcf_reader = vcf.Reader(open(vcf_file, 'r'))
+    records = [rec for rec in vcf_reader]
+    
+    variant_data = []
+    for record in records:
+        variant_info = {
+            'CHROM': record.CHROM,
+            'POS': record.POS,
+            'REF': record.REF,
+            'ALT': str(record.ALT[0]),
+            'QUAL': record.QUAL,
+            'FILTER': record.FILTER
+        }
+        variant_data.append(variant_info)
+    
+    variants_df = pd.DataFrame(variant_data)
+    return variants_df
+
+# Step 2: Variant Classification
+def classify_variant(row):
+    """
+    Classify a variant based on ACMG guidelines.
+    This is a simplified example; you'll need to implement your own classification logic.
+    """
+    if row['QUAL'] >= 50:
+        return 'Pathogenic'
+    elif row['QUAL'] >= 40:
+        return 'Likely Pathogenic'
+    else:
+        return 'Unclassified'
+
+def classify_variants(variants_df):
+    """
+    Apply variant classification to the DataFrame.
+    """
+    variants_df['ACMG_Classification'] = variants_df.apply(classify_variant, axis=1)
+    return variants_df
+
+# Step 3: Report Generation
+def generate_report(variants_df, patient_info):
+    """
+    Generate a PDF report containing variant information and ACMG classifications.
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, 'Clinical Report', 0, 1, align='C')
+    
+    # Patient Information
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 10, 'Patient Information', 0, 1)
+    pdf.set_font('Arial', '', 10)
+    for key, value in patient_info.items():
+        pdf.cell(0, 6, f'{key}: {value}', 0, 1)
+    
+    # Variant Information
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 10, 'Genomic Variant Information', 0, 1)
+    pdf.set_font('Arial', 'B', 10)
+    headers = ['Chromosome', 'Position', 'Reference Allele', 'Alternate Allele',
+               'Variant Quality', 'Filter Status', 'ACMG Classification']
+    pdf.cell(0, 6, ' '.join(headers), 0, 1)
+    pdf.set_font('Arial', '', 10)
+    for _, row in variants_df.iterrows():
+        pdf.cell(0, 6, ' '.join([str(row[col]) for col in headers]), 0, 1)
+    
+    # Save the PDF report
+    pdf.output('clinical_report.pdf', 'F')
+
+# Example usage
+vcf_file = 'path/to/your/vcf_file.vcf'
+variants_df = parse_vcf(vcf_file)
+classified_variants_df = classify_variants(variants_df)
+
+patient_info = {
+    'Patient ID': '12345',
+    'Date of Birth': '01/01/1990',
+    'Gender': 'Male',
+    'Ethnicity': 'Caucasian',
+    'Family History': 'Maternal history of breast cancer'
+}
+
+generate_report(classified_variants_df, patient_info)
+
+# Run a Python script
+python /path/to/your/script.py
+
+# ------------------- ---------------------------------------------------------
+#                          future plan: Nextflaw building & running
+# ------------------- ---------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
